@@ -1,0 +1,134 @@
+# Copyright 2023 The Archivista Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+on:
+  workflow_call:
+    inputs:
+      pull_request:
+        description: 'DEPRECATED: Use use-witness instead.'
+        required: false
+        type: boolean
+      use-witness:
+        description: 'Whether to use witness for attestation (default: true)'
+        required: false
+        default: true
+        type: boolean
+      version:
+        required: false
+        default: '0.9.2'
+        type: string
+      artifact-download:
+        required: false
+        type: string
+      artifact-upload-name:
+        required: false
+        type: string
+      artifact-upload-path:
+        required: false
+        type: string
+      pre-command:
+        required: false
+        type: string
+      pre-command-attestations:
+        default: 'environment git github'
+        required: false
+        type: string
+      command:
+        required: true
+        type: string
+      step:
+        required: true
+        type: string
+      attestations:
+        required: true
+        type: string
+      archivista-server:
+        default: 'https://archivista.testifysec.io'
+        required: false
+        type: string
+      workingdir:
+        required: false
+        type: string
+    secrets:
+      archivista-headers-token:
+        required: false
+
+jobs:
+  witness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+        with:
+          go-version: 1.24.x
+
+      - if: ${{ inputs.artifact-download != '' }}
+        uses: actions/download-artifact@6b208ae046db98c579e8a3aa621ab581ff575935 # v4.1.1
+        with:
+          name: ${{ inputs.artifact-download }}
+          path: /tmp
+
+      - if: >-
+          ${{
+            inputs.pre-command != '' && (
+              (inputs.pull_request != null && inputs.pull_request == false) ||
+              (inputs.pull_request == null && inputs.use-witness == true)
+            )
+          }}
+        uses: testifysec/witness-run-action@main
+        with:
+          version: ${{ inputs.version }}
+          archivista-server: ${{ inputs.archivista-server }}
+          archivista-headers: 'Authorization: Token ${{ secrets.archivista-headers-token }}'
+          workingdir: ${{ inputs.workingdir }}
+          step: pre-${{ inputs.step }}
+          attestations: ${{ inputs.pre-command-attestations }}
+          command: /bin/sh -c "${{ inputs.pre-command }}"
+      - if: >-
+          ${{
+            inputs.pre-command != '' && (
+              (inputs.pull_request != null && inputs.pull_request == true) ||
+              (inputs.pull_request == null && inputs.use-witness == false)
+            )
+          }}
+        run: ${{ inputs.pre-command }}
+        working-directory: ${{ inputs.workingdir }}
+
+      - if: >-
+          ${{
+            (inputs.pull_request != null && inputs.pull_request == false) ||
+            (inputs.pull_request == null && inputs.use-witness == true)
+          }}
+        uses: testifysec/witness-run-action@main
+        with:
+          version: ${{ inputs.version }}
+          archivista-server: ${{ inputs.archivista-server }}
+          archivista-headers: 'Authorization: Token ${{ secrets.archivista-headers-token }}'
+          workingdir: ${{ inputs.workingdir }}
+          step: ${{ inputs.step }}
+          attestations: ${{ inputs.attestations }}
+          command: /bin/sh -c "${{ inputs.command }}"
+      - if: >-
+          ${{
+            (inputs.pull_request != null && inputs.pull_request == true) ||
+            (inputs.pull_request == null && inputs.use-witness == false)
+          }}
+        run: ${{ inputs.command }}
+        working-directory: ${{ inputs.workingdir }}
+
+      - if: ${{ inputs.artifact-upload-path != '' && inputs.artifact-upload-name != ''}}
+        uses: actions/upload-artifact@26f96dfa697d77e81fd5907df203aa23a56210a8 # v4.3.0
+        with:
+          name: ${{ inputs.artifact-upload-name }}
+          path: ${{ inputs.artifact-upload-path }}

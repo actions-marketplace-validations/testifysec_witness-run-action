@@ -6,164 +6,251 @@ const process = require("process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const tc = require("@actions/tool-cache");
 
 async function run() {
+  const workingdir = core.getInput("workingdir");
+  const fullWorkspacePath = path.join(process.env.GITHUB_WORKSPACE, workingdir);
+  const witnessInstallDir = core.getInput('witness-install-dir') || fullWorkspacePath;
 
-    const step = core.getInput("step");
-    const archivistaServer = core.getInput("archivista-server");
-    const attestations = core.getInput("attestations").split(" ");
-    const certificate = core.getInput("certificate");
-    const enableArchivista = core.getInput("enable-archivista") === "true";
-    let fulcio = core.getInput("fulcio");
-    let fulcioOidcClientId = core.getInput("fulcio-oidc-client-id");
-    let fulcioOidcIssuer = core.getInput("fulcio-oidc-issuer");
-    const fulcioToken = core.getInput("fulcio-token");
-    const intermediates = core.getInput("intermediates").split(" ");
-    const key = core.getInput("key");
-    let outfile = core.getInput("outfile")
-    outfile = outfile ? outfile : path.join(os.tmpdir(), step + "-attestation.json");
-    const productExcludeGlob = core.getInput("product-exclude-glob");
-    const productIncludeGlob = core.getInput("product-include-glob");
-    const spiffeSocket = core.getInput("spiffe-socket");
+  // Download Witness
+  const version = core.getInput("version");
 
-    let timestampServers = core.getInput("timestamp-servers")
-    const trace = core.getInput("trace");
-    const workingdir = core.getInput("workingdir");
-    const enableSigstore = core.getInput("enable-sigstore") === "true";
-    const command = core.getInput("command");
+  let witnessPath = tc.find("witness", version);
+  console.log("Cached Witness Path: " + witnessPath);
+  console.log("Witness Directory: " + witnessPath);
+  console.log("Witness install directory: " + witnessInstallDir);
 
-
-    const cmd = ["witness run"];
-
-
-
-    cmd.push("--archivista-server", archivistaServer);
-    if (enableSigstore) {
-        fulcio = fulcio || "https://v1.fulcio.sigstore.dev";
-        fulcioOidcClientId = fulcioOidcClientId || "https://oauth2.sigstore.dev/auth";
-        fulcioOidcIssuer = fulcioOidcIssuer || "sigstore";
-        timestampServers = "https://freetsa.org/tsr " + timestampServers
+  if (!witnessPath) {
+    console.log("Witness not found in cache, downloading now");
+    let witnessTar;
+    if (process.platform === "win32") {
+      witnessTar = await tc.downloadTool(
+        "https://github.com/in-toto/witness/releases/download/v" +
+        version +
+        "/witness_" +
+        version +
+        "_windows_amd64.tar.gz"
+      );
+    } else if (process.platform === "darwin") {
+      witnessTar = await tc.downloadTool(
+        "https://github.com/in-toto/witness/releases/download/v" +
+        version +
+        "/witness_" +
+        version +
+        "_darwin_amd64.tar.gz"
+      );
+    } else {
+      witnessTar = await tc.downloadTool(
+        "https://github.com/in-toto/witness/releases/download/v" +
+        version +
+        "/witness_" +
+        version +
+        "_linux_amd64.tar.gz"
+      );
     }
-    if (attestations.length) {
-        attestations.forEach((attestation) => {
-            // Trim leading and trailing spaces from the attestation value
-            attestation = attestation.trim();
-            // Skip empty attestation values
-            if (attestation.length > 0) {
-                // Use "--attestation" as a separate argument and push the value separately
-                cmd.push("-a");
-                cmd.push(attestation);
-            }
-        });
+
+    if (!fs.existsSync(witnessInstallDir)) {
+      console.log("Creating witness install directory at " + witnessInstallDir);
+      fs.mkdirSync(witnessInstallDir, { recursive: true });
     }
-    if (certificate) cmd.push("--certificate", certificate);
-    if (enableArchivista) cmd.push("--enable-archivista", enableArchivista);
-    if (fulcio) cmd.push("--fulcio", fulcio);
-    if (fulcioOidcClientId) cmd.push("--fulcio-oidc-client-id", fulcioOidcClientId);
-    if (fulcioOidcIssuer) cmd.push("--fulcio-oidc-issuer", fulcioOidcIssuer);
-    if (fulcioToken) cmd.push("--fulcio-token", fulcioToken);
-    if (intermediates.length) {
-        intermediates.forEach((intermediate) => {
-            // Trim leading and trailing spaces from the intermediate value
-            intermediate = intermediate.trim();
-            // Skip empty intermediate values
-            if (intermediate.length > 0) {
-                // Use "-i" as a separate argument and push the value separately
-                cmd.push("-i");
-                cmd.push(intermediate);
-            }
-        });
-    }
-    if (key) cmd.push("--key", key);
 
-    if (productExcludeGlob) cmd.push("--product-excludeGlob", productExcludeGlob);
-    if (productIncludeGlob) cmd.push("--product-includeGlob", productIncludeGlob);
-    if (spiffeSocket) cmd.push("--spiffe-socket", spiffeSocket);
-    if (step) cmd.push("-s", step);
-    if (timestampServers) {
-        // Split the timestampServers string by space to get an array of values
-        const timestampServerValues = timestampServers.split(" ");
-        timestampServerValues.forEach((timestampServer) => {
-            // Trim leading and trailing spaces from the timestampServer value
-            timestampServer = timestampServer.trim();
-            // Skip empty timestampServer values
-            if (timestampServer.length > 0) {
-                // Use "--timestamp-servers" as a separate argument and push the value separately
-                cmd.push("--timestamp-servers");
-                cmd.push(timestampServer);
-            }
-        });
-    }
-    if (trace) cmd.push("--trace", trace);
+    console.log("Extracting witness at: " + witnessInstallDir);
+    witnessPath = await tc.extractTar(witnessTar, witnessInstallDir);
+    const cachedPath = await tc.cacheFile(
+      path.join(witnessPath, "witness"),
+      "witness",
+      "witness",
+      version
+    );
+    console.log("Witness cached at: " + cachedPath);
+  }
 
-    cmd.push("--outfile", outfile);
+  core.addPath(witnessPath);
 
-    cmd.push("--", command);
+  const step = core.getInput("step");
+  const archivistaServer = core.getInput("archivista-server");
+  const archivistaHeaders = core.getInput("archivista-headers");
+  const attestations = core.getInput("attestations").split(" ");
+  const certificate = core.getInput("certificate");
+  const enableArchivista = core.getInput("enable-archivista") === "true";
+  let fulcio = core.getInput("fulcio");
+  let fulcioOidcClientId = core.getInput("fulcio-oidc-client-id");
+  let fulcioOidcIssuer = core.getInput("fulcio-oidc-issuer");
+  const fulcioToken = core.getInput("fulcio-token");
+  const intermediates = core.getInput("intermediates").split(" ");
+  const key = core.getInput("key");
+  let outfile = core.getInput("outfile");
+  outfile = outfile
+    ? outfile
+    : path.join(os.tmpdir(), step + "-attestation.json");
+  const productExcludeGlob = core.getInput("product-exclude-glob");
+  const productIncludeGlob = core.getInput("product-include-glob");
+  const spiffeSocket = core.getInput("spiffe-socket");
 
-    const cmdJoined = cmd.join(" ");
-    core.info("Running command: " + cmdJoined);
+  let timestampServers = core.getInput("timestamp-servers");
+  const trace = core.getInput("trace");
+  const enableSigstore = core.getInput("enable-sigstore") === "true";
+  const command = core.getInput("command");
 
-    // Change working directory to the root of the repo
-    process.chdir(process.env.GITHUB_WORKSPACE);
+  const exportLink = core.getInput("attestor-link-export") === "true";
+  const exportSBOM = core.getInput("attestor-sbom-export") === "true";
+  const exportSLSA = core.getInput("attestor-slsa-export") === "true";
+  const mavenPOM = core.getInput("attestor-maven-pom-path");
 
-    // Execute the command and capture its output
-    let output = "";
-    await exec.exec("./" + cmdJoined, [], {
-        listeners: {
-            stdout: (data) => {
-                output += data.toString();
-            },
-            stderr: (data) => {
-                output += data.toString();
-            },
-        },
+  const cmd = ["run"];
+
+  if (enableSigstore) {
+    fulcio = fulcio || "https://fulcio.sigstore.dev";
+    fulcioOidcClientId = fulcioOidcClientId || "sigstore";
+    fulcioOidcIssuer = fulcioOidcIssuer || "https://oauth2.sigstore.dev/auth";
+    timestampServers = timestampServers || "https://timestamp.sigstore.dev/api/v1/timestamp";
+  }
+
+  if (attestations.length) {
+    attestations.forEach((attestation) => {
+      attestation = attestation.trim();
+      if (attestation.length > 0) {
+        cmd.push(`-a=${attestation}`);
+      }
     });
+  }
 
-    // Find the Git OID using regex
-    const match = output.match(/[0-9a-fA-F]{64}/);
-    if (!match) {
-        console.error('Failed to extract Git OID from the output');
-        process.exit(1);
-    }
+  if (exportLink) cmd.push(`--attestor-link-export`);
+  if (exportSBOM) cmd.push(`--attestor-sbom-export`);
+  if (exportSLSA) cmd.push(`--attestor-slsa-export`);
 
-    const gitOID = match[0];
-    console.log('Extracted Git OID:', gitOID);
+  if (mavenPOM) cmd.push(`--attestor-maven-pom-path=${mavenPOM}`);
 
-    // Print the Git OID to the output
+  if (certificate) cmd.push(`--certificate=${certificate}`);
+  if (enableArchivista) cmd.push(`--enable-archivista=${enableArchivista}`);
+  if (archivistaServer) cmd.push(`--archivista-server=${archivistaServer}`);
+  if (archivistaHeaders) {
+    const splitHeaders = archivistaHeaders.split(/\r|\n/);
+    splitHeaders.forEach((header) => {
+      cmd.push(`--archivista-headers="${header.trim()}"`);
+    });
+  }
+
+  if (fulcio) cmd.push(`--signer-fulcio-url=${fulcio}`);
+  if (fulcioOidcClientId) cmd.push(`--signer-fulcio-oidc-client-id=${fulcioOidcClientId}`);
+  if (fulcioOidcIssuer) cmd.push(`--signer-fulcio-oidc-issuer=${fulcioOidcIssuer}`);
+  if (fulcioToken) cmd.push(`--signer-fulcio-token=${fulcioToken}`);
+
+  if (intermediates.length) {
+    intermediates.forEach((intermediate) => {
+      intermediate = intermediate.trim();
+      if (intermediate.length > 0) {
+        cmd.push(`-i=${intermediate}`);
+      }
+    });
+  }
+
+  if (key) cmd.push(`--key=${key}`);
+  if (productExcludeGlob) cmd.push(`--attestor-product-exclude-glob=${productExcludeGlob}`);
+  if (productIncludeGlob) cmd.push(`--attestor-product-include-glob=${productIncludeGlob}`);
+  if (spiffeSocket) cmd.push(`--spiffe-socket=${spiffeSocket}`);
+  if (step) cmd.push(`-s=${step}`);
+
+  if (timestampServers) {
+    const timestampServerValues = timestampServers.split(" ");
+    timestampServerValues.forEach((timestampServer) => {
+      timestampServer = timestampServer.trim();
+      if (timestampServer.length > 0) {
+        cmd.push(`--timestamp-servers=${timestampServer}`);
+      }
+    });
+  }
+
+  if (trace) cmd.push(`--trace=${trace}`);
+  if (outfile) cmd.push(`--outfile=${outfile}`);
+  core.info("Running in directory " + fullWorkspacePath);
+
+  process.env.PATH = `${__dirname}:${process.env.PATH}`;
+  process.env.PATH = `${process.env.PATH}:/bin:/usr/bin`;
+
+  process.chdir(fullWorkspacePath);
+
+  const commandArray = command.match(/(?:[^\s"]+|"[^"]*")+/g);
+
+  // Execute the command and capture its output
+  const runArray = ["witness", ...cmd, "--", ...commandArray],
+    commandString = runArray.join(" ");
+
+  let output = "";
+  await exec.exec("sh", ["-c", commandString], {
+    cwd: process.cwd(),
+    env: process.env,
+    listeners: {
+      stdout: (data) => {
+        output += data.toString();
+      },
+      stderr: (data) => {
+        output += data.toString();
+      },
+    },
+  });
+
+  // Find the GitOID from the output
+  const gitOIDs = extractDesiredGitOIDs(output);
+
+  for (const gitOID of gitOIDs) {
+    console.log("Extracted GitOID:", gitOID);
+
+    // Print the GitOID to the output
     core.setOutput("git_oid", gitOID);
 
-    // Construct the artifact URL using Archivista server and Git OID
+    // Construct the artifact URL using Archivista server and GitOID
     const artifactURL = `${archivistaServer}/download/${gitOID}`;
 
     // Add Job Summary with Markdown content
     const summaryHeader = `
-## Attestations Created
-| Step | Attestors Run | Attentation OID
-| --- | --- | --- |
-`;
+  ## Attestations Created
+  | Step | Attestors Run | Attestation GitOID
+  | --- | --- | --- |
+  `;
 
     // Read the contents of the file
-    const summaryFile = fs.readFileSync(process.env.GITHUB_STEP_SUMMARY, { encoding: "utf-8" });
+    const summaryFile = fs.readFileSync(process.env.GITHUB_STEP_SUMMARY, {
+      encoding: "utf-8",
+    });
 
     // Check if the file contains the header
     const headerExists = summaryFile.includes(summaryHeader.trim());
 
     // If the header does not exist, append it to the file
     if (!headerExists) {
-        fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summaryHeader);
+      fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summaryHeader);
     }
 
     // Construct the table row for the current step
-    const tableRow = `| ${step} | ${attestations.join(', ')} | [${gitOID}](${artifactURL}) |\n`;
-
+    const tableRow = `| ${step} | ${attestations.join(", ")} | [${gitOID}](${artifactURL}) |\n`;
 
     // Append the table row to the file
     fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, tableRow);
-
-    exit(0);
-
+  }
+  exit(0);
 }
 
+function extractDesiredGitOIDs(output) {
+  const lines = output.split("\n");
+  const desiredSubstring = "Stored in archivista as ";
 
+  const matchArray = [];
+  console.log("Looking for GitOID in the output");
+  for (const line of lines) {
+    const startIndex = line.indexOf(desiredSubstring);
+    if (startIndex !== -1) {
+      console.log("Checking line: ", line);
+      const match = line.match(/[0-9a-fA-F]{64}/);
+      if (match) {
+        console.log("Found GitOID: ", match[0]);
+        matchArray.push(match[0]);
+      }
+    }
+  }
+
+  return matchArray;
+}
 
 run();
